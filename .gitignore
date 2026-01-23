@@ -1,0 +1,8 @@
+.DS_Store
+.idea/
+database/
+db.sqlite*
+web_root/
+marksdam-linux-amd64
+marksdam
+

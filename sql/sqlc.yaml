@@ -1,0 +1,10 @@
+#file: noinspection SpellCheckingInspection
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "query.sql"
+    schema: "schema.sql"
+    gen:
+      go:
+        package: "dbAccess"
+        out: "generated_files"
