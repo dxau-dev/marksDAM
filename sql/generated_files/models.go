@@ -18,6 +18,7 @@ type ImageFile struct {
 	MtimeUnix     sql.NullInt64
 	Status        string
 	LastError     sql.NullString
+	Description   sql.NullString
 	CreatedAtUnix int64
 	UpdatedAtUnix int64
 }

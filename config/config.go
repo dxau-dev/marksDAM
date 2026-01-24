@@ -10,6 +10,7 @@ import (
 // Config holds all configuration options loaded from TOML
 type Config struct {
 	WebHost          string   `toml:"webHost"`
+	SystemWebRoot    string   `toml:"systemWebRoot"`
 	ImageExtensions  []string `toml:"imageExtensions"`
 	DBPath           string   `toml:"dbPath"`
 	Model            string   `toml:"model"`
@@ -27,12 +28,13 @@ var cfg *Config
 // DefaultConfig returns a Config with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		WebHost:         "https://example.com/",
-		ImageExtensions: []string{"gif", "jpeg", "jpg", "png", "webp"},
-		DBPath:          "marksdam.db",
-		Model:           "gpt-4.1",
-		Detail:          "high",
-		Prompt:          "Access the image. Describe it in a single sentence. Extract any text and return individual words. Create a list of tags that will be associated with the image for searching.",
+		WebHost:          "https://example.com/",
+		SystemWebRoot:    "/var/www",
+		ImageExtensions:  []string{"gif", "jpeg", "jpg", "png", "webp"},
+		DBPath:           "marksdam.db",
+		Model:            "gpt-4.1",
+		Detail:           "high",
+		Prompt:           "Access the image. Return the data in the following JSON structure: {\"data\": {\"description\": $THE_DESCRIPTION, \"ocr\": [ $SLICE_OF_OCR_WORDS ], \"tags\":[ $SLICE_OF_TAGS ] }, \"meta\": { $ANY_META_DATA_IN_JSON_FORMAT } Where $THE_DESCRIPTION is a single sentence descripting, $SLICE_OF_OCR_WORDS are the words, if any, in the image, and $SLICE_OF_TAGS is a list of tags that will be associated with the image for searching. $ANY_META_DATA_IN_JSON_FORMAT contains any additional meta data that is relevant.",
 		CompletionWindow: "24h",
 	}
 }
@@ -103,6 +105,14 @@ func GetWebHost() string {
 		return cfg.WebHost
 	}
 	return DefaultConfig().WebHost
+}
+
+// GetSystemWebRoot returns the filesystem path to the web server root
+func GetSystemWebRoot() string {
+	if cfg != nil {
+		return cfg.SystemWebRoot
+	}
+	return DefaultConfig().SystemWebRoot
 }
 
 // GetImageExtensions returns the list of image extensions to process

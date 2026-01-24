@@ -122,7 +122,7 @@ func (q *Queries) GetBatchByOpenAIID(ctx context.Context, openaiBatchID string) 
 }
 
 const getImageFileByID = `-- name: GetImageFileByID :one
-SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, created_at_unix, updated_at_unix FROM image_file WHERE id = ?
+SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, description, created_at_unix, updated_at_unix FROM image_file WHERE id = ?
 `
 
 func (q *Queries) GetImageFileByID(ctx context.Context, id int64) (ImageFile, error) {
@@ -138,6 +138,7 @@ func (q *Queries) GetImageFileByID(ctx context.Context, id int64) (ImageFile, er
 		&i.MtimeUnix,
 		&i.Status,
 		&i.LastError,
+		&i.Description,
 		&i.CreatedAtUnix,
 		&i.UpdatedAtUnix,
 	)
@@ -145,7 +146,7 @@ func (q *Queries) GetImageFileByID(ctx context.Context, id int64) (ImageFile, er
 }
 
 const getImageFileByPath = `-- name: GetImageFileByPath :one
-SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, created_at_unix, updated_at_unix FROM image_file WHERE file = ?
+SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, description, created_at_unix, updated_at_unix FROM image_file WHERE file = ?
 `
 
 func (q *Queries) GetImageFileByPath(ctx context.Context, file string) (ImageFile, error) {
@@ -161,6 +162,7 @@ func (q *Queries) GetImageFileByPath(ctx context.Context, file string) (ImageFil
 		&i.MtimeUnix,
 		&i.Status,
 		&i.LastError,
+		&i.Description,
 		&i.CreatedAtUnix,
 		&i.UpdatedAtUnix,
 	)
@@ -208,7 +210,7 @@ func (q *Queries) GetMetaForImage(ctx context.Context, imageFileID int64) ([]str
 }
 
 const getPendingImages = `-- name: GetPendingImages :many
-SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, created_at_unix, updated_at_unix FROM image_file WHERE status IN ('new', 'error') ORDER BY id
+SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, description, created_at_unix, updated_at_unix FROM image_file WHERE status IN ('new', 'error') ORDER BY id
 `
 
 func (q *Queries) GetPendingImages(ctx context.Context) ([]ImageFile, error) {
@@ -230,6 +232,7 @@ func (q *Queries) GetPendingImages(ctx context.Context) ([]ImageFile, error) {
 			&i.MtimeUnix,
 			&i.Status,
 			&i.LastError,
+			&i.Description,
 			&i.CreatedAtUnix,
 			&i.UpdatedAtUnix,
 		); err != nil {
@@ -247,7 +250,7 @@ func (q *Queries) GetPendingImages(ctx context.Context) ([]ImageFile, error) {
 }
 
 const getQueuedImages = `-- name: GetQueuedImages :many
-SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, created_at_unix, updated_at_unix FROM image_file WHERE status = 'queued' ORDER BY id
+SELECT id, file, name, ext, url, size_bytes, mtime_unix, status, last_error, description, created_at_unix, updated_at_unix FROM image_file WHERE status = 'queued' ORDER BY id
 `
 
 func (q *Queries) GetQueuedImages(ctx context.Context) ([]ImageFile, error) {
@@ -269,6 +272,7 @@ func (q *Queries) GetQueuedImages(ctx context.Context) ([]ImageFile, error) {
 			&i.MtimeUnix,
 			&i.Status,
 			&i.LastError,
+			&i.Description,
 			&i.CreatedAtUnix,
 			&i.UpdatedAtUnix,
 		); err != nil {
@@ -647,6 +651,21 @@ type UpdateBatchStatusParams struct {
 
 func (q *Queries) UpdateBatchStatus(ctx context.Context, arg UpdateBatchStatusParams) error {
 	_, err := q.db.ExecContext(ctx, updateBatchStatus, arg.Status, arg.LastCheckedAtUnix, arg.ID)
+	return err
+}
+
+const updateImageFileCompleted = `-- name: UpdateImageFileCompleted :exec
+UPDATE image_file SET status = 'completed', description = ?, updated_at_unix = ? WHERE id = ?
+`
+
+type UpdateImageFileCompletedParams struct {
+	Description   sql.NullString
+	UpdatedAtUnix int64
+	ID            int64
+}
+
+func (q *Queries) UpdateImageFileCompleted(ctx context.Context, arg UpdateImageFileCompletedParams) error {
+	_, err := q.db.ExecContext(ctx, updateImageFileCompleted, arg.Description, arg.UpdatedAtUnix, arg.ID)
 	return err
 }
 

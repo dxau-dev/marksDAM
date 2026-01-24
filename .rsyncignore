@@ -1,0 +1,6 @@
+.rsyncignore
+.DS_Store
+.git
+.idea
+marksdam*
+

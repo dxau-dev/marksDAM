@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
 	"time"
 
-	fu "github.com/dxau-dev/fileUtilities"
 	du "github.com/dxau-dev/dateUtilities"
 	"github.com/dxau-dev/marksDAM/config"
 	"github.com/dxau-dev/marksDAM/openai"
@@ -28,7 +27,7 @@ func Retrieve(configPath string) error {
 	}
 
 	dbPath := config.GetDBLocation()
-	if !fu.FileDirExists(dbPath) {
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return fmt.Errorf("database not found at %s. Run 'setup' first", dbPath)
 	}
 
@@ -176,9 +175,13 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 			fmt.Printf("    Warning: failed to save result: %v\n", err)
 		}
 
-		err = extractAndSaveMeta(ctx, queries, req.ImageFileID, content, nowUnix)
+		err = queries.UpdateImageFileCompleted(ctx, dbAccess.UpdateImageFileCompletedParams{
+			Description:   toNullStr(content),
+			UpdatedAtUnix: nowUnix,
+			ID:            req.ImageFileID,
+		})
 		if err != nil {
-			fmt.Printf("    Warning: failed to save metadata: %v\n", err)
+			fmt.Printf("    Warning: failed to update image: %v\n", err)
 		}
 
 		err = queries.UpdateRequestCompleted(ctx, dbAccess.UpdateRequestCompletedParams{
@@ -187,15 +190,6 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 		})
 		if err != nil {
 			fmt.Printf("    Warning: failed to update request status: %v\n", err)
-		}
-
-		err = queries.UpdateImageFileStatus(ctx, dbAccess.UpdateImageFileStatusParams{
-			Status:        "completed",
-			UpdatedAtUnix: nowUnix,
-			ID:            req.ImageFileID,
-		})
-		if err != nil {
-			fmt.Printf("    Warning: failed to update image status: %v\n", err)
 		}
 
 		successCount++
@@ -218,36 +212,7 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 	return nil
 }
 
-func extractAndSaveMeta(ctx context.Context, queries *dbAccess.Queries, imageFileID int64, content string, nowUnix int64) error {
-	words := strings.Fields(content)
 
-	for _, word := range words {
-		word = strings.Trim(word, ".,;:!?\"'()[]{}")
-		word = strings.ToLower(word)
-		if len(word) < 2 {
-			continue
-		}
-
-		metaID, err := queries.InsertImageMeta(ctx, word)
-		if err != nil {
-			existingMeta, err := queries.GetImageMetaByText(ctx, word)
-			if err != nil {
-				continue
-			}
-			metaID = existingMeta
-		}
-
-		err = queries.InsertMetaMap(ctx, dbAccess.InsertMetaMapParams{
-			ImageFileID: imageFileID,
-			ImageMetaID: metaID,
-		})
-		if err != nil {
-			continue
-		}
-	}
-
-	return nil
-}
 
 func toNullStr(s string) sql.NullString {
 	if s == "" {

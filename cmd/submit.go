@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -28,7 +30,7 @@ func Submit(configPath string) error {
 	}
 
 	dbPath := config.GetDBLocation()
-	if !fu.FileDirExists(dbPath) {
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return fmt.Errorf("database not found at %s. Run 'setup' first", dbPath)
 	}
 
@@ -57,8 +59,16 @@ func Submit(configPath string) error {
 	nowUnix := du.ToUTC(time.Now()).Unix()
 	webHost := config.GetWebHost()
 
+	webURLPath, err := calculateWebURLPath()
+	if err != nil {
+		return fmt.Errorf("failed to calculate web URL path: %w", err)
+	}
+	if webURLPath != "" {
+		fmt.Printf("Web URL path prefix: %s\n", webURLPath)
+	}
+
 	for _, img := range imageFiles {
-		url := webHost + img.Path
+		url := buildImageURL(webHost, webURLPath, img.Path)
 		id, err := queries.InsertImageFile(ctx, dbAccess.InsertImageFileParams{
 			File:          img.Path,
 			Name:          img.Name,
@@ -101,7 +111,7 @@ func Submit(configPath string) error {
 		customID := fmt.Sprintf("img-%d", img.ID)
 		imageURL := img.Url.String
 		if imageURL == "" {
-			imageURL = webHost + img.File
+			imageURL = buildImageURL(webHost, webURLPath, img.File)
 		}
 
 		req := openai.BuildBatchRequest(customID, imageURL, model, prompt, detail)
@@ -221,4 +231,50 @@ func scanForImages() ([]ImageFileInfo, error) {
 	}
 
 	return images, nil
+}
+
+// calculateWebURLPath returns the relative path from systemWebRoot to the current working directory
+func calculateWebURLPath() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	systemWebRoot := config.GetSystemWebRoot()
+	if systemWebRoot == "" {
+		return "", nil
+	}
+
+	absWebRoot, err := filepath.Abs(systemWebRoot)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve web root path: %w", err)
+	}
+
+	relPath, err := filepath.Rel(absWebRoot, cwd)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate relative path from %s to %s: %w", absWebRoot, cwd, err)
+	}
+
+	if relPath == "." {
+		return "", nil
+	}
+
+	relPath = filepath.ToSlash(relPath)
+
+	return relPath, nil
+}
+
+// buildImageURL constructs the full URL for an image
+func buildImageURL(webHost, webURLPath, imagePath string) string {
+	if !strings.HasSuffix(webHost, "/") {
+		webHost += "/"
+	}
+
+	imagePath = strings.TrimPrefix(imagePath, "./")
+
+	if webURLPath == "" {
+		return webHost + imagePath
+	}
+
+	return webHost + webURLPath + "/" + imagePath
 }

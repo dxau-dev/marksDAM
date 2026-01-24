@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS image_file (
     mtime_unix INTEGER,                  -- File modification time (Unix timestamp, UTC)
     status TEXT NOT NULL DEFAULT 'new',  -- new | queued | submitted | completed | error
     last_error TEXT,                     -- Error message if status is 'error'
+    description TEXT,                    -- Full OpenAI response text
     created_at_unix INTEGER NOT NULL,    -- Record creation time (UTC)
     updated_at_unix INTEGER NOT NULL     -- Record last update time (UTC)
 );

@@ -30,6 +30,9 @@ UPDATE image_file SET status = ?, updated_at_unix = ? WHERE id = ?;
 -- name: UpdateImageFileError :exec
 UPDATE image_file SET status = 'error', last_error = ?, updated_at_unix = ? WHERE id = ?;
 
+-- name: UpdateImageFileCompleted :exec
+UPDATE image_file SET status = 'completed', description = ?, updated_at_unix = ? WHERE id = ?;
+
 -- name: MarkImagesQueued :exec
 UPDATE image_file SET status = 'queued', updated_at_unix = ? WHERE status = 'new';
 
