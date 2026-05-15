@@ -1,0 +1,328 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>openai: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/dxau-dev/marksDAM/openai/batch.go (52.1%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package openai
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+
+        "github.com/openai/openai-go"
+)
+
+// BatchRequest represents a single request line in the JSONL file
+type BatchRequest struct {
+        CustomID string      `json:"custom_id"`
+        Method   string      `json:"method"`
+        URL      string      `json:"url"`
+        Body     RequestBody `json:"body"`
+}
+
+// RequestBody is the body of a chat completion request
+type RequestBody struct {
+        Model     string    `json:"model"`
+        Messages  []Message `json:"messages"`
+        MaxTokens int       `json:"max_tokens"`
+}
+
+// Message represents a chat message
+type Message struct {
+        Role    string `json:"role"`
+        Content any    `json:"content"`
+}
+
+// ImageContent represents content with an image URL
+type ImageContent struct {
+        Type     string    `json:"type"`
+        Text     string    `json:"text,omitempty"`
+        ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL represents an image URL with detail level
+type ImageURL struct {
+        URL    string `json:"url"`
+        Detail string `json:"detail"`
+}
+
+// BatchResponse represents a single response line from the output JSONL
+type BatchResponse struct {
+        ID       string         `json:"id"`
+        CustomID string         `json:"custom_id"`
+        Response *ResponseBody  `json:"response,omitempty"`
+        Error    *ResponseError `json:"error,omitempty"`
+}
+
+// ResponseBody contains the actual response from OpenAI
+type ResponseBody struct {
+        StatusCode int             `json:"status_code"`
+        Body       json.RawMessage `json:"body"`
+}
+
+// ResponseError contains error information
+type ResponseError struct {
+        Code    string `json:"code"`
+        Message string `json:"message"`
+}
+
+// ChatCompletionResponse represents a chat completion response body
+type ChatCompletionResponse struct {
+        ID      string   `json:"id"`
+        Choices []Choice `json:"choices"`
+}
+
+// Choice represents a single choice in the response
+type Choice struct {
+        Index   int            `json:"index"`
+        Message ResponseMessage `json:"message"`
+}
+
+// ResponseMessage is the assistant's response message
+type ResponseMessage struct {
+        Role    string `json:"role"`
+        Content string `json:"content"`
+}
+
+// Client wraps the OpenAI client
+type Client struct {
+        client openai.Client
+}
+
+// NewClient creates a new OpenAI client
+func NewClient() *Client <span class="cov0" title="0">{
+        return &amp;Client{
+                client: openai.NewClient(),
+        }
+}</span>
+
+// BuildBatchRequest creates a batch request for an image
+func BuildBatchRequest(customID, imageURL, model, prompt, detail string) BatchRequest <span class="cov8" title="1">{
+        return BatchRequest{
+                CustomID: customID,
+                Method:   "POST",
+                URL:      "/v1/chat/completions",
+                Body: RequestBody{
+                        Model: model,
+                        Messages: []Message{
+                                {
+                                        Role: "user",
+                                        Content: []ImageContent{
+                                                {
+                                                        Type: "text",
+                                                        Text: prompt,
+                                                },
+                                                {
+                                                        Type: "image_url",
+                                                        ImageURL: &amp;ImageURL{
+                                                                URL:    imageURL,
+                                                                Detail: detail,
+                                                        },
+                                                },
+                                        },
+                                },
+                        },
+                        MaxTokens: 4096,
+                },
+        }
+}</span>
+
+// BuildJSONL creates JSONL content from a list of batch requests
+func BuildJSONL(requests []BatchRequest) ([]byte, error) <span class="cov8" title="1">{
+        var buf bytes.Buffer
+        encoder := json.NewEncoder(&amp;buf)
+        for _, req := range requests </span><span class="cov8" title="1">{
+                if err := encoder.Encode(req); err != nil </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("failed to encode request: %w", err)
+                }</span>
+        }
+        <span class="cov8" title="1">return buf.Bytes(), nil</span>
+}
+
+// UploadBatchFile uploads a JSONL file for batch processing
+func (c *Client) UploadBatchFile(ctx context.Context, jsonlData []byte) (string, error) <span class="cov0" title="0">{
+        file, err := c.client.Files.New(ctx, openai.FileNewParams{
+                File:    openai.File(bytes.NewReader(jsonlData), "batch_input.jsonl", "application/jsonl"),
+                Purpose: openai.FilePurposeBatch,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("failed to upload file: %w", err)
+        }</span>
+        <span class="cov0" title="0">return file.ID, nil</span>
+}
+
+// CreateBatch creates a new batch job
+func (c *Client) CreateBatch(ctx context.Context, inputFileID string) (*openai.Batch, error) <span class="cov0" title="0">{
+        batch, err := c.client.Batches.New(ctx, openai.BatchNewParams{
+                InputFileID:      inputFileID,
+                Endpoint:         openai.BatchNewParamsEndpointV1ChatCompletions,
+                CompletionWindow: openai.BatchNewParamsCompletionWindow24h,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to create batch: %w", err)
+        }</span>
+        <span class="cov0" title="0">return batch, nil</span>
+}
+
+// GetBatch retrieves the status of a batch
+func (c *Client) GetBatch(ctx context.Context, batchID string) (*openai.Batch, error) <span class="cov0" title="0">{
+        batch, err := c.client.Batches.Get(ctx, batchID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to get batch: %w", err)
+        }</span>
+        <span class="cov0" title="0">return batch, nil</span>
+}
+
+// DownloadFile downloads a file from OpenAI
+func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, error) <span class="cov0" title="0">{
+        resp, err := c.client.Files.Content(ctx, fileID)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to download file: %w", err)
+        }</span>
+        <span class="cov0" title="0">defer resp.Body.Close()
+
+        data, err := io.ReadAll(resp.Body)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to read file content: %w", err)
+        }</span>
+        <span class="cov0" title="0">return data, nil</span>
+}
+
+// ParseBatchOutput parses the JSONL output from a completed batch
+func ParseBatchOutput(data []byte) ([]BatchResponse, error) <span class="cov8" title="1">{
+        var responses []BatchResponse
+        decoder := json.NewDecoder(bytes.NewReader(data))
+        for </span><span class="cov8" title="1">{
+                var resp BatchResponse
+                if err := decoder.Decode(&amp;resp); err != nil </span><span class="cov8" title="1">{
+                        if err == io.EOF </span><span class="cov8" title="1">{
+                                break</span>
+                        }
+                        <span class="cov8" title="1">return nil, fmt.Errorf("failed to decode response: %w", err)</span>
+                }
+                <span class="cov8" title="1">responses = append(responses, resp)</span>
+        }
+        <span class="cov8" title="1">return responses, nil</span>
+}
+
+// ExtractContent extracts the text content from a batch response
+func ExtractContent(resp BatchResponse) (string, error) <span class="cov8" title="1">{
+        if resp.Error != nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("request failed: %s - %s", resp.Error.Code, resp.Error.Message)
+        }</span>
+        <span class="cov8" title="1">if resp.Response == nil </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("no response body")
+        }</span>
+
+        <span class="cov8" title="1">var chatResp ChatCompletionResponse
+        if err := json.Unmarshal(resp.Response.Body, &amp;chatResp); err != nil </span><span class="cov0" title="0">{
+                return "", fmt.Errorf("failed to parse response body: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">if len(chatResp.Choices) == 0 </span><span class="cov8" title="1">{
+                return "", fmt.Errorf("no choices in response")
+        }</span>
+
+        <span class="cov8" title="1">return chatResp.Choices[0].Message.Content, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
