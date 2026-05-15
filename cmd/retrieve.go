@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	sdkOpenai "github.com/openai/openai-go"
 )
 
-// Retrieve polls OpenAI for batch results and updates the database
+// Retrieve polls OpenAI for batch results and updates the database.
 func Retrieve(configPath string) error {
 	if err := config.SetConfigDir(configPath); err != nil {
 		return fmt.Errorf("failed to set config directory: %w", err)
@@ -35,7 +36,11 @@ func Retrieve(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	defer dbOpen.CloseDB(db)
+	defer func() {
+		if err := dbOpen.CloseDB(db); err != nil {
+			log.Printf("warning: failed to close database: %v", err)
+		}
+	}()
 
 	queries := dbAccess.New(db)
 	ctx := context.Background()
@@ -55,44 +60,62 @@ func Retrieve(configPath string) error {
 
 	for _, batch := range activeBatches {
 		fmt.Printf("\nChecking batch: %s\n", batch.OpenaiBatchID)
+		nowUnix := du.ToUTC(time.Now()).Unix()
 
 		apiBatch, err := client.GetBatch(ctx, batch.OpenaiBatchID)
 		if err != nil {
-			fmt.Printf("  Error fetching batch status: %v\n", err)
+			// E4: include batch ID; E3: record the attempt timestamp.
+			fmt.Printf("  Error fetching batch %s status: %v\n", batch.OpenaiBatchID, err)
+			_ = queries.UpdateBatchStatus(ctx, dbAccess.UpdateBatchStatusParams{
+				Status:            batch.Status,
+				LastCheckedAtUnix: toNullInt(nowUnix),
+				ID:                batch.ID,
+			})
 			continue
 		}
 
-		nowUnix := du.ToUTC(time.Now()).Unix()
 		fmt.Printf("  Status: %s\n", apiBatch.Status)
 
 		switch apiBatch.Status {
 		case "completed":
-			err = processCompletedBatch(ctx, queries, client, batch, apiBatch, nowUnix)
-			if err != nil {
+			if err := processCompletedBatch(ctx, queries, client, batch, apiBatch, nowUnix); err != nil {
 				fmt.Printf("  Error processing completed batch: %v\n", err)
+				// B4: mark terminal so this batch is not retried on every retrieve run.
+				batchJSON, marshalErr := json.Marshal(apiBatch)
+				if marshalErr != nil {
+					fmt.Printf("  Warning: failed to marshal batch JSON: %v\n", marshalErr)
+				}
+				_ = queries.UpdateBatchFailed(ctx, dbAccess.UpdateBatchFailedParams{
+					Status:            "failed",
+					ErrorFileID:       toNullStr(apiBatch.ErrorFileID),
+					LastCheckedAtUnix: toNullInt(nowUnix),
+					RawJson:           toNullStr(string(batchJSON)),
+					ID:                batch.ID,
+				})
 			}
 
 		case "failed", "expired", "cancelled":
-			batchJSON, _ := json.Marshal(apiBatch)
-			err = queries.UpdateBatchFailed(ctx, dbAccess.UpdateBatchFailedParams{
+			batchJSON, marshalErr := json.Marshal(apiBatch)
+			if marshalErr != nil {
+				fmt.Printf("  Warning: failed to marshal batch JSON: %v\n", marshalErr)
+			}
+			if err := queries.UpdateBatchFailed(ctx, dbAccess.UpdateBatchFailedParams{
 				Status:            string(apiBatch.Status),
 				ErrorFileID:       toNullStr(apiBatch.ErrorFileID),
 				LastCheckedAtUnix: toNullInt(nowUnix),
 				RawJson:           toNullStr(string(batchJSON)),
 				ID:                batch.ID,
-			})
-			if err != nil {
+			}); err != nil {
 				fmt.Printf("  Error updating batch status: %v\n", err)
 			}
 			fmt.Printf("  Batch %s: %s\n", apiBatch.Status, batch.OpenaiBatchID)
 
 		default:
-			err = queries.UpdateBatchStatus(ctx, dbAccess.UpdateBatchStatusParams{
+			if err := queries.UpdateBatchStatus(ctx, dbAccess.UpdateBatchStatusParams{
 				Status:            string(apiBatch.Status),
 				LastCheckedAtUnix: toNullInt(nowUnix),
 				ID:                batch.ID,
-			})
-			if err != nil {
+			}); err != nil {
 				fmt.Printf("  Error updating batch status: %v\n", err)
 			}
 			if apiBatch.RequestCounts.Total > 0 {
@@ -138,20 +161,18 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 
 		if resp.Error != nil {
 			errMsg := fmt.Sprintf("%s: %s", resp.Error.Code, resp.Error.Message)
-			err = queries.UpdateRequestError(ctx, dbAccess.UpdateRequestErrorParams{
+			if err := queries.UpdateRequestError(ctx, dbAccess.UpdateRequestErrorParams{
 				Error:         toNullStr(errMsg),
 				UpdatedAtUnix: toNullInt(nowUnix),
 				ID:            req.ID,
-			})
-			if err != nil {
+			}); err != nil {
 				fmt.Printf("    Warning: failed to update request error: %v\n", err)
 			}
-			err = queries.UpdateImageFileError(ctx, dbAccess.UpdateImageFileErrorParams{
+			if err := queries.UpdateImageFileError(ctx, dbAccess.UpdateImageFileErrorParams{
 				LastError:     toNullStr(errMsg),
 				UpdatedAtUnix: nowUnix,
 				ID:            req.ImageFileID,
-			})
-			if err != nil {
+			}); err != nil {
 				fmt.Printf("    Warning: failed to update image error: %v\n", err)
 			}
 			errorCount++
@@ -165,54 +186,56 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 			continue
 		}
 
-		responseJSON, _ := json.Marshal(resp)
-		_, err = queries.InsertResult(ctx, dbAccess.InsertResultParams{
+		// B2: handle json.Marshal error.
+		responseJSON, marshalErr := json.Marshal(resp)
+		if marshalErr != nil {
+			fmt.Printf("    Warning: failed to marshal response JSON for %s: %v\n", resp.CustomID, marshalErr)
+		}
+		if _, err := queries.InsertResult(ctx, dbAccess.InsertResultParams{
 			RequestID:     req.ID,
 			OutputJson:    string(responseJSON),
 			CreatedAtUnix: nowUnix,
-		})
-		if err != nil {
+		}); err != nil {
 			fmt.Printf("    Warning: failed to save result: %v\n", err)
 		}
 
-		err = queries.UpdateImageFileCompleted(ctx, dbAccess.UpdateImageFileCompletedParams{
+		if err := queries.UpdateImageFileCompleted(ctx, dbAccess.UpdateImageFileCompletedParams{
 			Description:   toNullStr(content),
 			UpdatedAtUnix: nowUnix,
 			ID:            req.ImageFileID,
-		})
-		if err != nil {
+		}); err != nil {
 			fmt.Printf("    Warning: failed to update image: %v\n", err)
 		}
 
-		err = queries.UpdateRequestCompleted(ctx, dbAccess.UpdateRequestCompletedParams{
+		if err := queries.UpdateRequestCompleted(ctx, dbAccess.UpdateRequestCompletedParams{
 			UpdatedAtUnix: toNullInt(nowUnix),
 			ID:            req.ID,
-		})
-		if err != nil {
+		}); err != nil {
 			fmt.Printf("    Warning: failed to update request status: %v\n", err)
 		}
 
 		successCount++
 	}
 
-	batchJSON, _ := json.Marshal(apiBatch)
-	err = queries.UpdateBatchCompleted(ctx, dbAccess.UpdateBatchCompletedParams{
+	// B2: handle json.Marshal error.
+	batchJSON, marshalErr := json.Marshal(apiBatch)
+	if marshalErr != nil {
+		fmt.Printf("  Warning: failed to marshal batch JSON: %v\n", marshalErr)
+	}
+	if err := queries.UpdateBatchCompleted(ctx, dbAccess.UpdateBatchCompletedParams{
 		OutputFileID:      toNullStr(apiBatch.OutputFileID),
 		ErrorFileID:       toNullStr(apiBatch.ErrorFileID),
 		CompletedAtUnix:   toNullInt(nowUnix),
 		LastCheckedAtUnix: toNullInt(nowUnix),
 		RawJson:           toNullStr(string(batchJSON)),
 		ID:                batch.ID,
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("failed to update batch completion: %w", err)
 	}
 
 	fmt.Printf("  Completed: %d successful, %d errors\n", successCount, errorCount)
 	return nil
 }
-
-
 
 func toNullStr(s string) sql.NullString {
 	if s == "" {
