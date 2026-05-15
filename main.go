@@ -19,7 +19,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "setup":
-		setupCmd := flag.NewFlagSet("setup", flag.ExitOnError)
+		setupCmd := flag.NewFlagSet("setup", flag.ContinueOnError)
 		configPath := setupCmd.String("path", "", "Relative path for config and database directory (required)")
 		if err := setupCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -34,7 +34,7 @@ func main() {
 		}
 
 	case "submit":
-		submitCmd := flag.NewFlagSet("submit", flag.ExitOnError)
+		submitCmd := flag.NewFlagSet("submit", flag.ContinueOnError)
 		configPath := submitCmd.String("config", "", "Path to config and database directory (required)")
 		if err := submitCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -49,7 +49,7 @@ func main() {
 		}
 
 	case "retrieve":
-		retrieveCmd := flag.NewFlagSet("retrieve", flag.ExitOnError)
+		retrieveCmd := flag.NewFlagSet("retrieve", flag.ContinueOnError)
 		configPath := retrieveCmd.String("config", "", "Path to config and database directory (required)")
 		if err := retrieveCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -64,7 +64,7 @@ func main() {
 		}
 
 	case "config":
-		configCmd := flag.NewFlagSet("config", flag.ExitOnError)
+		configCmd := flag.NewFlagSet("config", flag.ContinueOnError)
 		configPath := configCmd.String("path", "", "Path to config and database directory (required)")
 		printFlag := configCmd.Bool("print", false, "Print current configuration")
 		if err := configCmd.Parse(os.Args[2:]); err != nil {
