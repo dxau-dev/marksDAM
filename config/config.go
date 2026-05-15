@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -43,7 +44,7 @@ func DefaultConfig() *Config {
 func SetConfigDir(dir string) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolving config directory path: %w", err)
 	}
 	configDir = absDir
 	return nil
@@ -76,8 +77,10 @@ func Load() error {
 		return nil
 	}
 
-	_, err := toml.DecodeFile(tomlPath, cfg)
-	return err
+	if _, err := toml.DecodeFile(tomlPath, cfg); err != nil {
+		return fmt.Errorf("parsing config file: %w", err)
+	}
+	return nil
 }
 
 // Save writes the current configuration to the TOML file
@@ -90,8 +93,10 @@ func Save(c *Config) error {
 	}
 	defer f.Close()
 
-	encoder := toml.NewEncoder(f)
-	return encoder.Encode(c)
+	if err := toml.NewEncoder(f).Encode(c); err != nil {
+		return fmt.Errorf("encoding config: %w", err)
+	}
+	return nil
 }
 
 // CreateDefaultConfig creates a new config.toml with default values
