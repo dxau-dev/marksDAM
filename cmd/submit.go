@@ -145,6 +145,10 @@ func Submit(configPath string) error {
 	if marshalErr != nil {
 		fmt.Printf("Warning: failed to marshal batch JSON: %v\n", marshalErr)
 	}
+	rawJson := sql.NullString{Valid: false}
+	if marshalErr == nil {
+		rawJson = sql.NullString{String: string(batchJSON), Valid: true}
+	}
 
 	batchID, err := queries.InsertBatch(ctx, dbAccess.InsertBatchParams{
 		OpenaiBatchID:   batch.ID,
@@ -153,7 +157,7 @@ func Submit(configPath string) error {
 		Status:          string(batch.Status),
 		RequestCount:    sql.NullInt64{Int64: int64(len(batchRequests)), Valid: true},
 		SubmittedAtUnix: nowUnix,
-		RawJson:         sql.NullString{String: string(batchJSON), Valid: true},
+		RawJson:         rawJson,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to save batch to database: %w", err)
@@ -227,9 +231,10 @@ func scanForImages() ([]ImageFileInfo, error) {
 		modTime := time.Now()
 		fileInfo, err := fu.GetFileInfo(file.Path)
 		if err != nil {
-			// B6: warn instead of silently substituting time.Now().
 			fmt.Printf("Warning: could not read file info for %s: %v; using current time as mtime\n", file.Path, err)
-		} else if fileInfo != nil {
+		} else if fileInfo == nil {
+			fmt.Printf("Warning: GetFileInfo returned nil for %s; using current time as mtime\n", file.Path)
+		} else {
 			modTime = fileInfo.ModifiedAt
 		}
 
