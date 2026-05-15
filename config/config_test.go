@@ -17,11 +17,8 @@ func TestConfigRoundTrip(t *testing.T) {
 	if err := Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := GetModel(); got != "gpt-4.1" {
-		t.Errorf("GetModel() = %q, want %q", got, "gpt-4.1")
-	}
-	if got := GetDetail(); got != "high" {
-		t.Errorf("GetDetail() = %q, want %q", got, "high")
+	if got := GetModel(); got != "claude-sonnet-4-5" {
+		t.Errorf("GetModel() = %q, want %q", got, "claude-sonnet-4-5")
 	}
 }
 

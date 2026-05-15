@@ -97,10 +97,10 @@ Commands:
   setup     Initialize config and database in a directory
             -path <dir>    Relative path for config/database directory (required)
 
-  submit    Scan directory for images and submit batch to OpenAI
+  submit    Scan directory for images and submit batch to Anthropic
             -config <dir>  Path to config/database directory (required)
 
-  retrieve  Poll OpenAI for batch results and update database
+  retrieve  Poll Anthropic for batch results and update database
             -config <dir>  Path to config/database directory (required)
 
   config    Show or validate configuration
