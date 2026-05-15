@@ -5,21 +5,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	fu "github.com/dxau-dev/fileUtilities"
 	du "github.com/dxau-dev/dateUtilities"
+	fu "github.com/dxau-dev/fileUtilities"
 	"github.com/dxau-dev/marksDAM/config"
 	"github.com/dxau-dev/marksDAM/openai"
 	dbOpen "github.com/dxau-dev/marksDAM/sql"
 	"github.com/dxau-dev/marksDAM/sql/generated_files"
 )
 
-// Submit scans the current directory for images and submits them to OpenAI batch API
+// Submit scans the current directory for images and submits them to OpenAI batch API.
 func Submit(configPath string) error {
 	if err := config.SetConfigDir(configPath); err != nil {
 		return fmt.Errorf("failed to set config directory: %w", err)
@@ -38,7 +39,11 @@ func Submit(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	defer dbOpen.CloseDB(db)
+	defer func() {
+		if err := dbOpen.CloseDB(db); err != nil {
+			log.Printf("warning: failed to close database: %v", err)
+		}
+	}()
 
 	queries := dbAccess.New(db)
 	ctx := context.Background()
@@ -98,35 +103,20 @@ func Submit(configPath string) error {
 		return nil
 	}
 
-	fmt.Printf("Creating batch requests for %d images...\n", len(pendingImages))
-
 	model := config.GetModel()
 	prompt := config.GetPrompt()
 	detail := config.GetDetail()
 
-	var batchRequests []openai.BatchRequest
-	var requestImageIDs []int64
-
+	// B5: build requests in memory only — no DB writes until after CreateBatch succeeds.
+	fmt.Printf("Creating batch requests for %d images...\n", len(pendingImages))
+	batchRequests := make([]openai.BatchRequest, 0, len(pendingImages))
 	for _, img := range pendingImages {
 		customID := fmt.Sprintf("img-%d", img.ID)
 		imageURL := img.Url.String
 		if imageURL == "" {
 			imageURL = buildImageURL(webHost, webURLPath, img.File)
 		}
-
-		req := openai.BuildBatchRequest(customID, imageURL, model, prompt, detail)
-		batchRequests = append(batchRequests, req)
-		requestImageIDs = append(requestImageIDs, img.ID)
-
-		_, err := queries.InsertRequest(ctx, dbAccess.InsertRequestParams{
-			ImageFileID:   img.ID,
-			CustomID:      customID,
-			Model:         model,
-			CreatedAtUnix: nowUnix,
-		})
-		if err != nil {
-			fmt.Printf("Warning: failed to create request for image %d: %v\n", img.ID, err)
-		}
+		batchRequests = append(batchRequests, openai.BuildBatchRequest(customID, imageURL, model, prompt, detail))
 	}
 
 	jsonlData, err := openai.BuildJSONL(batchRequests)
@@ -149,7 +139,12 @@ func Submit(configPath string) error {
 		return fmt.Errorf("failed to create batch: %w", err)
 	}
 
-	batchJSON, _ := json.Marshal(batch)
+	// B5: CreateBatch succeeded — safe to write to DB now.
+	// B3: handle json.Marshal error.
+	batchJSON, marshalErr := json.Marshal(batch)
+	if marshalErr != nil {
+		fmt.Printf("Warning: failed to marshal batch JSON: %v\n", marshalErr)
+	}
 
 	batchID, err := queries.InsertBatch(ctx, dbAccess.InsertBatchParams{
 		OpenaiBatchID:   batch.ID,
@@ -164,21 +159,31 @@ func Submit(configPath string) error {
 		return fmt.Errorf("failed to save batch to database: %w", err)
 	}
 
-	err = queries.AttachRequestsToBatch(ctx, dbAccess.AttachRequestsToBatchParams{
+	for _, img := range pendingImages {
+		customID := fmt.Sprintf("img-%d", img.ID)
+		if _, err := queries.InsertRequest(ctx, dbAccess.InsertRequestParams{
+			ImageFileID:   img.ID,
+			CustomID:      customID,
+			Model:         model,
+			CreatedAtUnix: nowUnix,
+		}); err != nil {
+			fmt.Printf("Warning: failed to create request for image %d: %v\n", img.ID, err)
+		}
+	}
+
+	if err := queries.AttachRequestsToBatch(ctx, dbAccess.AttachRequestsToBatchParams{
 		BatchID:       sql.NullInt64{Int64: batchID, Valid: true},
 		UpdatedAtUnix: sql.NullInt64{Int64: nowUnix, Valid: true},
-	})
-	if err != nil {
+	}); err != nil {
 		fmt.Printf("Warning: failed to attach requests to batch: %v\n", err)
 	}
 
-	for _, imgID := range requestImageIDs {
-		err = queries.UpdateImageFileStatus(ctx, dbAccess.UpdateImageFileStatusParams{
+	for _, img := range pendingImages {
+		if err := queries.UpdateImageFileStatus(ctx, dbAccess.UpdateImageFileStatusParams{
 			Status:        "submitted",
 			UpdatedAtUnix: nowUnix,
-			ID:            imgID,
-		})
-		if err != nil {
+			ID:            img.ID,
+		}); err != nil {
 			fmt.Printf("Warning: failed to update image status: %v\n", err)
 		}
 	}
@@ -192,7 +197,7 @@ func Submit(configPath string) error {
 	return nil
 }
 
-// ImageFileInfo contains information about a scanned image file
+// ImageFileInfo contains information about a scanned image file.
 type ImageFileInfo struct {
 	Path      string
 	Name      string
@@ -215,25 +220,31 @@ func scanForImages() ([]ImageFileInfo, error) {
 		}
 		filenameParts := fu.SplitFilename(file.Path)
 		ext := strings.ToLower(filenameParts.Extension)
-		if slices.Contains(extensions, ext) {
-			fileInfo, err := fu.GetFileInfo(file.Path)
-			modTime := time.Now()
-			if err == nil && fileInfo != nil {
-				modTime = fileInfo.ModifiedAt
-			}
-			images = append(images, ImageFileInfo{
-				Path:      file.Path,
-				Name:      filenameParts.Name,
-				Extension: ext,
-				ModTime:   modTime,
-			})
+		if !slices.Contains(extensions, ext) {
+			continue
 		}
+
+		modTime := time.Now()
+		fileInfo, err := fu.GetFileInfo(file.Path)
+		if err != nil {
+			// B6: warn instead of silently substituting time.Now().
+			fmt.Printf("Warning: could not read file info for %s: %v; using current time as mtime\n", file.Path, err)
+		} else if fileInfo != nil {
+			modTime = fileInfo.ModifiedAt
+		}
+
+		images = append(images, ImageFileInfo{
+			Path:      file.Path,
+			Name:      filenameParts.Name,
+			Extension: ext,
+			ModTime:   modTime,
+		})
 	}
 
 	return images, nil
 }
 
-// calculateWebURLPath returns the relative path from systemWebRoot to the current working directory
+// calculateWebURLPath returns the relative path from systemWebRoot to the current working directory.
 func calculateWebURLPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -259,22 +270,17 @@ func calculateWebURLPath() (string, error) {
 		return "", nil
 	}
 
-	relPath = filepath.ToSlash(relPath)
-
-	return relPath, nil
+	return filepath.ToSlash(relPath), nil
 }
 
-// buildImageURL constructs the full URL for an image
+// buildImageURL constructs the full URL for an image.
 func buildImageURL(webHost, webURLPath, imagePath string) string {
 	if !strings.HasSuffix(webHost, "/") {
 		webHost += "/"
 	}
-
 	imagePath = strings.TrimPrefix(imagePath, "./")
-
 	if webURLPath == "" {
 		return webHost + imagePath
 	}
-
 	return webHost + webURLPath + "/" + imagePath
 }
