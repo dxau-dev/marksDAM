@@ -213,4 +213,4 @@ marksdam submit -config ~/dam-config
 
 ## License
 
-[Add your license here]
+MIT

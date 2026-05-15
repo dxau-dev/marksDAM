@@ -42,8 +42,8 @@ func Setup(relativePath string) error {
 	if fu.FileDirExists(dbPath) {
 		fmt.Printf("Database already exists: %s\n", dbPath)
 	} else {
-		if !dbOpen.CreateDB(dbPath) {
-			return fmt.Errorf("failed to create database: %s", dbPath)
+		if err := dbOpen.CreateDB(dbPath); err != nil {
+			return fmt.Errorf("failed to create database: %w", err)
 		}
 		fmt.Printf("Created database: %s\n", dbPath)
 	}
