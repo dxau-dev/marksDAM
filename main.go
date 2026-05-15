@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"github.com/dxau-dev/marksDAM/cmd"
 )
 

@@ -11,7 +11,7 @@ import (
 func OpenDB(path string) (*sql.DB, error) {
 	dsn := "file:" + path + dsnParameters
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}

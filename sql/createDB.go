@@ -6,20 +6,20 @@ import (
 	_ "embed"
 	"fmt"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
 var ddl string
 
-var dsnParameters = "?_busy_timeout=5000&_foreign_keys=1"
+var dsnParameters = "?_busy_timeout=5000&_pragma=foreign_keys(1)"
 var pragmaParams = `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;`
 
 func CreateDB(path string) error {
 	ctx := context.Background()
 	dsn := "file:" + path + dsnParameters
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
