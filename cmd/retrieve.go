@@ -186,17 +186,18 @@ func processCompletedBatch(ctx context.Context, queries *dbAccess.Queries, clien
 			continue
 		}
 
-		// B2: handle json.Marshal error.
+		// B2: handle json.Marshal error; skip InsertResult if marshal fails (output_json is NOT NULL).
 		responseJSON, marshalErr := json.Marshal(resp)
 		if marshalErr != nil {
 			fmt.Printf("    Warning: failed to marshal response JSON for %s: %v\n", resp.CustomID, marshalErr)
-		}
-		if _, err := queries.InsertResult(ctx, dbAccess.InsertResultParams{
-			RequestID:     req.ID,
-			OutputJson:    string(responseJSON),
-			CreatedAtUnix: nowUnix,
-		}); err != nil {
-			fmt.Printf("    Warning: failed to save result: %v\n", err)
+		} else {
+			if _, err := queries.InsertResult(ctx, dbAccess.InsertResultParams{
+				RequestID:     req.ID,
+				OutputJson:    string(responseJSON),
+				CreatedAtUnix: nowUnix,
+			}); err != nil {
+				fmt.Printf("    Warning: failed to save result: %v\n", err)
+			}
 		}
 
 		if err := queries.UpdateImageFileCompleted(ctx, dbAccess.UpdateImageFileCompletedParams{
