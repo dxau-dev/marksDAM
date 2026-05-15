@@ -14,18 +14,17 @@ import (
 
 	du "github.com/dxau-dev/dateUtilities"
 	fu "github.com/dxau-dev/fileUtilities"
+	markdam "github.com/dxau-dev/marksDAM/anthropic"
 	"github.com/dxau-dev/marksDAM/config"
-	"github.com/dxau-dev/marksDAM/openai"
 	dbOpen "github.com/dxau-dev/marksDAM/sql"
 	"github.com/dxau-dev/marksDAM/sql/generated_files"
 )
 
-// Submit scans the current directory for images and submits them to OpenAI batch API.
+// Submit scans the current directory for images and submits them to the Anthropic batch API.
 func Submit(configPath string) error {
 	if err := config.SetConfigDir(configPath); err != nil {
 		return fmt.Errorf("failed to set config directory: %w", err)
 	}
-
 	if err := config.Load(); err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
@@ -53,12 +52,10 @@ func Submit(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to scan for images: %w", err)
 	}
-
 	if len(imageFiles) == 0 {
 		fmt.Println("No image files found")
 		return nil
 	}
-
 	fmt.Printf("Found %d image files\n", len(imageFiles))
 
 	nowUnix := du.ToUTC(time.Now()).Unix()
@@ -97,7 +94,6 @@ func Submit(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get pending images: %w", err)
 	}
-
 	if len(pendingImages) == 0 {
 		fmt.Println("No pending images to submit")
 		return nil
@@ -105,42 +101,30 @@ func Submit(configPath string) error {
 
 	model := config.GetModel()
 	prompt := config.GetPrompt()
-	detail := config.GetDetail()
 
-	// B5: build requests in memory only — no DB writes until after CreateBatch succeeds.
 	fmt.Printf("Creating batch requests for %d images...\n", len(pendingImages))
-	batchRequests := make([]openai.BatchRequest, 0, len(pendingImages))
+	inputs := make([]markdam.ImageInput, 0, len(pendingImages))
 	for _, img := range pendingImages {
-		customID := fmt.Sprintf("img-%d", img.ID)
 		imageURL := img.Url.String
 		if imageURL == "" {
 			imageURL = buildImageURL(webHost, webURLPath, img.File)
 		}
-		batchRequests = append(batchRequests, openai.BuildBatchRequest(customID, imageURL, model, prompt, detail))
+		inputs = append(inputs, markdam.ImageInput{
+			CustomID: fmt.Sprintf("img-%d", img.ID),
+			ImageURL: imageURL,
+		})
 	}
 
-	jsonlData, err := openai.BuildJSONL(batchRequests)
-	if err != nil {
-		return fmt.Errorf("failed to build JSONL: %w", err)
-	}
+	requests := markdam.BuildRequests(inputs, model, prompt)
 
-	fmt.Println("Uploading batch file to OpenAI...")
-	client := openai.NewClient()
+	fmt.Println("Submitting batch to Anthropic...")
+	client := markdam.NewClient()
 
-	inputFileID, err := client.UploadBatchFile(ctx, jsonlData)
-	if err != nil {
-		return fmt.Errorf("failed to upload batch file: %w", err)
-	}
-	fmt.Printf("Uploaded batch file: %s\n", inputFileID)
-
-	fmt.Println("Creating batch...")
-	batch, err := client.CreateBatch(ctx, inputFileID)
+	batch, err := client.CreateBatch(ctx, requests)
 	if err != nil {
 		return fmt.Errorf("failed to create batch: %w", err)
 	}
 
-	// B5: CreateBatch succeeded — safe to write to DB now.
-	// B3: handle json.Marshal error.
 	batchJSON, marshalErr := json.Marshal(batch)
 	if marshalErr != nil {
 		fmt.Printf("Warning: failed to marshal batch JSON: %v\n", marshalErr)
@@ -151,11 +135,9 @@ func Submit(configPath string) error {
 	}
 
 	batchID, err := queries.InsertBatch(ctx, dbAccess.InsertBatchParams{
-		OpenaiBatchID:   batch.ID,
-		InputFileID:     inputFileID,
-		Endpoint:        string(batch.Endpoint),
-		Status:          string(batch.Status),
-		RequestCount:    sql.NullInt64{Int64: int64(len(batchRequests)), Valid: true},
+		ProviderBatchID: batch.ID,
+		Status:          string(batch.ProcessingStatus),
+		RequestCount:    sql.NullInt64{Int64: int64(len(requests)), Valid: true},
 		SubmittedAtUnix: nowUnix,
 		RawJson:         rawJson,
 	})
@@ -194,10 +176,9 @@ func Submit(configPath string) error {
 
 	fmt.Printf("\nBatch submitted successfully!\n")
 	fmt.Printf("  Batch ID: %s\n", batch.ID)
-	fmt.Printf("  Status: %s\n", batch.Status)
-	fmt.Printf("  Requests: %d\n", len(batchRequests))
+	fmt.Printf("  Status:   %s\n", batch.ProcessingStatus)
+	fmt.Printf("  Requests: %d\n", len(requests))
 	fmt.Println("\nRun 'retrieve' to poll for results.")
-
 	return nil
 }
 
@@ -245,40 +226,32 @@ func scanForImages() ([]ImageFileInfo, error) {
 			ModTime:   modTime,
 		})
 	}
-
 	return images, nil
 }
 
-// calculateWebURLPath returns the relative path from systemWebRoot to the current working directory.
 func calculateWebURLPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
-
 	systemWebRoot := config.GetSystemWebRoot()
 	if systemWebRoot == "" {
 		return "", nil
 	}
-
 	absWebRoot, err := filepath.Abs(systemWebRoot)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve web root path: %w", err)
 	}
-
 	relPath, err := filepath.Rel(absWebRoot, cwd)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate relative path from %s to %s: %w", absWebRoot, cwd, err)
 	}
-
 	if relPath == "." {
 		return "", nil
 	}
-
 	return filepath.ToSlash(relPath), nil
 }
 
-// buildImageURL constructs the full URL for an image.
 func buildImageURL(webHost, webURLPath, imagePath string) string {
 	if !strings.HasSuffix(webHost, "/") {
 		webHost += "/"
