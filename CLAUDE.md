@@ -28,18 +28,18 @@ GOOS=linux GOARCH=amd64 go build -o marksdam-linux-amd64 .  # Cross-compile for 
 
 ## Environment
 
-- `OPENAI_API_KEY` must be set for `submit` and `retrieve` commands.
+- `ANTHROPIC_API_KEY` must be set for `submit` and `retrieve` commands.
 - The binary operates on the **current working directory** when scanning for images (`submit` scans `.`).
 
 ## Architecture
 
-This is a CLI tool for batch-submitting images to OpenAI for metadata extraction, storing results in SQLite.
+This is a CLI tool for batch-submitting images to Anthropic for metadata extraction, storing results in SQLite.
 
 ### Data flow
 
 1. **`setup`** — creates `config.toml` and `marksdam.db` in a config directory.
-2. **`submit`** — scans CWD recursively for images → inserts into `image_file` table → builds JSONL → uploads to OpenAI Files API → creates an OpenAI Batch job → records everything in DB.
-3. **`retrieve`** — polls all non-terminal batches → on completion, downloads the output JSONL → parses each response → stores the raw JSON in `openai_result` and updates `image_file.description` + `image_file.status`.
+2. **`submit`** — scans CWD recursively for images → inserts into `image_file` table → builds inline batch requests → submits to Anthropic Message Batches API → records batch and requests in DB.
+3. **`retrieve`** — polls all non-terminal batches (`status != 'ended'`) → on completion, streams results → stores raw JSON in `ai_result` and updates `image_file.description` + `image_file.status`.
 
 ### Package responsibilities
 
@@ -48,12 +48,12 @@ This is a CLI tool for batch-submitting images to OpenAI for metadata extraction
 | `main.go` | CLI entry point; flag parsing per subcommand, routes to `cmd.*` |
 | `cmd/` | One file per subcommand (`setup`, `submit`, `retrieve`, `config`). All business logic lives here. |
 | `config/` | Package-level singletons `configDir` and `cfg`. Call `SetConfigDir` then `Load` before any getter. |
-| `openai/` | Thin wrapper around `github.com/openai/openai-go` — JSONL building, file upload, batch CRUD, response parsing. |
+| `anthropic/` | Thin wrapper around `github.com/anthropics/anthropic-sdk-go` — inline batch request building, batch CRUD, result streaming and parsing. |
 | `sql/` | `openDB.go` / `createDB.go` for connection management; `schema.sql` + `query.sql` are the source of truth; `generated_files/` is produced by `sqlc`. |
 
 ### URL construction
 
-`submit` builds public image URLs as: `webHost + relPath(systemWebRoot → CWD) + "/" + imageRelPath`. Images must be publicly accessible for OpenAI to fetch them.
+`submit` builds public image URLs as: `webHost + relPath(systemWebRoot → CWD) + "/" + imageRelPath`. Images must be publicly accessible for Anthropic to fetch them.
 
 ### sqlc-generated code
 
