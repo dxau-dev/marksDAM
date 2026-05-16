@@ -1,216 +1,188 @@
 # Mark's DAM
 
-A command-line Digital Asset Management utility that recursively scans directories for images and submits them to OpenAI's Batch API for analysis. The system extracts descriptions, text, and tags from images for searchable metadata.
+A command-line Digital Asset Management tool that recursively scans directories for images, submits them to Anthropic's Message Batches API for analysis, and stores the results in a local SQLite database. Each image gets a description, OCR text, and searchable tags extracted by `claude-sonnet-4-5`.
 
-## Features
+---
 
-- Recursive directory scanning for image files
-- OpenAI Batch API integration (50% cost savings vs synchronous API)
-- SQLite database for tracking images, batches, and metadata
-- TOML-based configuration
-- Cross-platform support (macOS, Linux)
+## Technical Overview
 
-## Installation
+### Architecture
 
-### Prerequisites
+marksDAM is a single Go binary with four subcommands (`setup`, `submit`, `retrieve`, `config`). State is persisted in a SQLite database managed via [sqlc](https://sqlc.dev)-generated queries. All AI requests go through the Anthropic Message Batches API — an async, ~50% cheaper alternative to synchronous API calls.
 
-- Go 1.22+ (for building from source)
-- OpenAI API key with Batch API access
+### Data flow
 
-### Building
+1. **`setup`** creates `config.toml` and `marksdam.db` in a config directory.
+2. **`submit`** scans the current working directory recursively, upserts image records into `image_file`, builds inline batch requests, and submits them to Anthropic in a single API call. The returned batch ID and each per-image request are recorded in the database, and images are marked `submitted`.
+3. **`retrieve`** polls all batches where `status != 'ended'`. When Anthropic reports `ended`, results are streamed and written to `ai_result`; `image_file.description` and `image_file.status` are updated accordingly. Images with failed or expired requests are marked `error` and picked up by the next `submit` run.
+
+### Package responsibilities
+
+| Package | Role |
+|---|---|
+| `main.go` | CLI entry point; flag parsing per subcommand, routes to `cmd.*` |
+| `cmd/` | One file per subcommand. All business logic lives here. |
+| `config/` | TOML config loading. Call `SetConfigDir` then `Load` before any getter. |
+| `anthropic/` | Thin wrapper around `github.com/anthropics/anthropic-sdk-go` — batch request building, batch CRUD, result streaming. |
+| `sql/` | Schema, queries, and connection management. `generated_files/` is produced by `sqlc generate` — do not edit directly. |
+
+### Database schema
+
+| Table | Purpose |
+|---|---|
+| `image_file` | One row per discovered image; tracks URL, status, and extracted description |
+| `image_meta` | Unique tag/keyword strings |
+| `meta_map` | Many-to-many join between `image_file` and `image_meta` |
+| `ai_batch` | One row per Anthropic batch submission |
+| `ai_request` | One row per image per batch |
+| `ai_result` | Raw Anthropic response JSON, one row per completed request |
+
+**Image status lifecycle:** `new` → `submitted` → `completed` or `error`. Re-running `submit` picks up any image with status `new` or `error`.
+
+### URL construction
+
+Images must be publicly accessible for Anthropic to fetch them. marksDAM builds URLs as:
+
+```
+{webHost} + relPath({systemWebRoot} → CWD) + "/" + {imageRelPath}
+```
+
+For example, with `webHost = "https://example.com/"`, `systemWebRoot = "/var/www"`, and CWD `/var/www/photos/2025`, an image `cats/tabby.jpg` becomes `https://example.com/photos/2025/cats/tabby.jpg`.
+
+### Build
+
+The project uses `modernc.org/sqlite` (pure Go — no CGo), so cross-compilation works without a C toolchain.
 
 ```bash
-# Build for current platform
+# Current platform
+just build
+
+# macOS ARM64 + Linux x86_64
+just build-all
+
+# Tests
+just test
+just test-race
+```
+
+Or without `just`:
+
+```bash
 go build -o marksdam .
-
-# Cross-compile for Linux
 GOOS=linux GOARCH=amd64 go build -o marksdam-linux-amd64 .
+go test ./...
 ```
 
-### Environment Setup
+### Dependencies
 
-Set your OpenAI API key:
+- `github.com/anthropics/anthropic-sdk-go` — Anthropic Go SDK
+- `modernc.org/sqlite` — pure-Go SQLite driver
+- `github.com/BurntSushi/toml` — TOML parser
+- `github.com/dxau-dev/fileUtilities` — recursive directory scanning
+- `github.com/dxau-dev/dateUtilities` — UTC date helpers
 
-```bash
-export OPENAI_API_KEY="your-api-key-here"
-```
+---
 
 ## Usage
 
-### 1. Initialize Configuration
+### Prerequisites
 
-First, create a configuration directory with the TOML config file and SQLite database:
+- Go 1.22+
+- An Anthropic API key
+
+```bash
+export ANTHROPIC_API_KEY="your-api-key-here"
+```
+
+Images must be served at a publicly accessible URL. Anthropic fetches each image directly during batch processing.
+
+### 1. Initialise
+
+Create a config directory containing `config.toml` and `marksdam.db`:
 
 ```bash
 marksdam setup -path ./dam-config
 ```
 
-This creates:
-- `dam-config/config.toml` - Configuration file
-- `dam-config/marksdam.db` - SQLite database
+### 2. Configure
 
-### 2. Configure Settings
-
-Edit `config.toml` to match your environment:
+Edit `dam-config/config.toml`:
 
 ```toml
-webHost = "https://example.com/"
-systemWebRoot = "/var/www"
+webHost         = "https://example.com/"
+systemWebRoot   = "/var/www"
 imageExtensions = ["gif", "jpeg", "jpg", "png", "webp"]
-dbPath = "marksdam.db"
-model = "gpt-4.1"
-detail = "high"
-prompt = "Access the image. Return the data in the following JSON structure: {"data": {"description": $THE_DESCRIPTION, "ocr": [ $SLICE_OF_OCR_WORDS ], "tags":[ $SLICE_OF_TAGS ] }, "meta": { $ANY_META_DATA_IN_JSON_FORMAT } Where $THE_DESCRIPTION is a single sentence descripting, $SLICE_OF_OCR_WORDS are the words, if any, in the image, and $SLICE_OF_TAGS is a list of tags that will be associated with the image for searching. $ANY_META_DATA_IN_JSON_FORMAT contains any additional meta data that is relevant."
-completionWindow = "24h"
+dbPath          = "marksdam.db"
+model           = "claude-sonnet-4-5"
+prompt          = "..."
 ```
 
-#### Configuration Options
-
 | Option | Description | Default |
-|--------|-------------|---------|
+|---|---|---|
 | `webHost` | Base URL where images are publicly accessible | `https://example.com/` |
-| `systemWebRoot` | Filesystem path to web server root | `/var/www` |
-| `imageExtensions` | File extensions to process | `["gif", "jpeg", "jpg", "png", "webp"]` |
-| `dbPath` | Database filename (relative to config directory) | `marksdam.db` |
-| `model` | OpenAI model for image analysis | `gpt-4.1` |
-| `detail` | Image detail level (`low`, `high`, `auto`) | `high` |
-| `prompt` | Prompt sent to OpenAI for each image | See default above |
-| `completionWindow` | Batch completion window | `24h` |
+| `systemWebRoot` | Filesystem path to web server root, used to calculate the URL path | `/var/www` |
+| `imageExtensions` | Extensions to scan for | `["gif","jpeg","jpg","png","webp"]` |
+| `dbPath` | Database filename, relative to config directory | `marksdam.db` |
+| `model` | Anthropic model | `claude-sonnet-4-5` |
+| `prompt` | Prompt sent with every image | See default in `config/config.go` |
 
-### 3. Submit Images
+### 3. Submit images
 
-Navigate to the directory containing images and run:
+Navigate to the directory you want to process, then run `submit`:
 
 ```bash
-cd /var/www/photos/album1
+cd /var/www/photos/2025
 marksdam submit -config /path/to/dam-config
 ```
 
-The command will:
-1. Scan the current directory recursively for image files
-2. Calculate the web URL path relative to `systemWebRoot`
-3. Store image records in the database
-4. Build and upload a JSONL batch file to OpenAI
-5. Create the batch job
+`submit` scans the current directory recursively, skipping images already in the database with status `submitted` or `completed`. It prints the resulting Anthropic batch ID.
 
-**URL Construction Example:**
-- `systemWebRoot`: `/var/www`
-- `webHost`: `https://example.com/`
-- Current directory: `/var/www/photos/album1`
-- Image: `sunset.jpg`
-- **Resulting URL**: `https://example.com/photos/album1/sunset.jpg`
-
-### 4. Retrieve Results
-
-Poll OpenAI for batch completion and download results:
+### 4. Retrieve results
 
 ```bash
 marksdam retrieve -config /path/to/dam-config
 ```
 
-Run this periodically until the batch completes. Results are stored in the database as metadata tags associated with each image.
+Run this periodically. It checks all active batches and, when Anthropic reports a batch as `ended`, downloads and stores the results. Each image's `description` column is populated with the extracted text.
 
-### 5. View Configuration
+Typical Anthropic batch turnaround is minutes to hours. The Anthropic dashboard shows progress if you need to monitor before the next `retrieve` run.
 
-Display current configuration:
+### 5. Inspect configuration
 
 ```bash
 marksdam config -path /path/to/dam-config -print
 ```
 
-## Commands Reference
-
-| Command | Description |
-|---------|-------------|
-| `setup -path <dir>` | Initialize config and database in the specified directory |
-| `submit -config <dir>` | Scan current directory for images and submit batch to OpenAI |
-| `retrieve -config <dir>` | Poll OpenAI for results and update database |
-| `config -path <dir> -print` | Display current configuration |
-| `help` | Show usage information |
-
-## Project Structure
-
-```
-marksDAM/
-├── main.go                 # CLI entry point and command routing
-├── cmd/
-│   ├── setup.go           # Setup command implementation
-│   ├── submit.go          # Submit command implementation
-│   ├── retrieve.go        # Retrieve command implementation
-│   └── config.go          # Config command implementation
-├── config/
-│   └── config.go          # TOML configuration handling
-├── openai/
-│   └── batch.go           # OpenAI Batch API wrapper
-├── sql/
-│   ├── schema.sql         # Database schema
-│   ├── query.sql          # SQL queries for sqlc
-│   ├── sqlc.yaml          # sqlc configuration
-│   ├── createDB.go        # Database creation
-│   ├── openDB.go          # Database connection
-│   └── generated_files/   # sqlc generated code
-└── README.md
-```
-
-## Database Schema
-
-### Tables
-
-- **image_file** - Discovered image files with status tracking
-- **image_meta** - Unique metadata/tag strings
-- **meta_map** - Many-to-many mapping between images and metadata
-- **openai_batch** - Batch submission records
-- **openai_request** - Individual requests within batches
-- **openai_result** - Raw OpenAI response storage
-
-### Image Status Values
-
-| Status | Description |
-|--------|-------------|
-| `new` | Discovered, not yet submitted |
-| `queued` | Queued for submission |
-| `submitted` | Submitted to OpenAI batch |
-| `completed` | Successfully processed |
-| `error` | Processing failed |
-
-## Workflow Example
+### Full example
 
 ```bash
-# 1. Set up configuration (one-time)
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# One-time setup
 marksdam setup -path ~/dam-config
 
-# 2. Edit configuration
+# Edit config to match your web host and image server root
 nano ~/dam-config/config.toml
 
-# 3. Navigate to images directory
-cd /var/www/gallery/2024
-
-# 4. Submit batch
+# Submit images from a directory
+cd /var/www/photos/2025
 marksdam submit -config ~/dam-config
 
-# 5. Wait and poll for results (run periodically)
+# Poll for results (run again later if still in_progress)
 marksdam retrieve -config ~/dam-config
 
-# 6. Process another directory
-cd /var/www/gallery/2025
+# Submit a second directory using the same config/database
+cd /var/www/photos/2024
 marksdam submit -config ~/dam-config
+marksdam retrieve -config ~/dam-config
 ```
 
-## Dependencies
+### Existing databases (migration from OpenAI version)
 
-- [github.com/openai/openai-go](https://github.com/openai/openai-go) - OpenAI Go SDK
-- [github.com/BurntSushi/toml](https://github.com/BurntSushi/toml) - TOML parser
-- [github.com/mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) - SQLite driver
-- [github.com/dxau-dev/fileUtilities](https://github.com/dxau-dev/fileUtilities) - File system utilities
-- [github.com/dxau-dev/dateUtilities](https://github.com/dxau-dev/dateUtilities) - Date/time utilities
+If you have a database created by the previous OpenAI-based version, run the migration script once:
 
-## Notes
+```bash
+sqlite3 /path/to/marksdam.db < sql/migrate_v2.sql
+```
 
-- Images must be publicly accessible via URL for OpenAI to process them
-- Batch API has a 24-hour completion window
-- Failed images are logged but not automatically retried; run `submit` again to retry
-- All dates are stored in UTC format in the database
-
-## License
-
-MIT
+This renames the `openai_*` tables to `ai_*` and maps historical status values to the Anthropic model. New databases created by `setup` do not need this step.

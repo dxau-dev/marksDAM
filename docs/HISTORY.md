@@ -1,5 +1,31 @@
 # History
 
+## 2026-05-15 → 2026-05-16
+
+### Anthropic migration
+
+Replaced OpenAI entirely with the Anthropic Message Batches API (`claude-sonnet-4-5`). The async submit→retrieve workflow is preserved with equivalent ~50% cost savings. As a secondary goal, the SQLite driver was swapped to a pure-Go implementation, enabling cross-platform builds without a CGo toolchain.
+
+**SQLite driver swap (`mattn/go-sqlite3` → `modernc.org/sqlite`)**
+`mattn/go-sqlite3` uses CGo, which requires a C compiler and prevents cross-compilation to Linux from macOS without a full cross-toolchain. `modernc.org/sqlite` is a pure-Go port with an identical `database/sql` interface. The driver name changed from `"sqlite3"` to `"sqlite"` and the DSN foreign-key pragma from `_foreign_keys=1` to `_pragma=foreign_keys(1)`.
+
+**DB schema rename (`openai_*` → `ai_*`)**
+The three `openai_batch`, `openai_request`, `openai_result` tables were renamed to `ai_batch`, `ai_request`, `ai_result`. `openai_batch_id` became `provider_batch_id`; the file-ID columns (`input_file_id`, `output_file_id`, `error_file_id`, `endpoint`) were dropped because the Anthropic API does not use a separate file-upload step. Batch status values simplified from OpenAI's multi-value set to Anthropic's two-state model (`in_progress` / `ended`). A `sql/migrate_v2.sql` script was written for users with existing databases.
+
+**Config cleanup**
+Removed `detail` and `completionWindow` fields (OpenAI-only). Default model updated to `claude-sonnet-4-5`. Environment variable documented as `ANTHROPIC_API_KEY`.
+
+**New `anthropic/` package**
+Replaced `openai/batch.go` with `anthropic/batch.go`. The new package submits requests inline as JSON (no JSONL build, no file upload). Public surface: `Client`, `BuildRequests`, `CreateBatch`, `GetBatch`, `DownloadResults`, `ExtractResult`. All covered by table-driven unit tests.
+
+**`cmd/submit.go` and `cmd/retrieve.go` updated**
+`submit` now calls `BuildRequests` then `CreateBatch` directly. `retrieve` uses a two-branch switch on `ProcessingStatus` (`ended` / default) and calls `client.DownloadResults` to stream results, replacing the OpenAI file-download-and-parse flow. `UpdateBatchCompleted` and `UpdateBatchFailed` were replaced with a single `UpdateBatchEnded` query.
+
+**`justfile` added**
+Provides `build`, `build-all` (macOS ARM64 + Linux x86\_64), `test`, `test-race`, `lint`, `fmt`, and `sqlc` recipes.
+
+---
+
 ## 2026-05-15
 
 ### Code audit and bug fixes
