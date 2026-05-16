@@ -7,7 +7,6 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.43.0
 	github.com/dxau-dev/dateUtilities v1.0.0
 	github.com/dxau-dev/fileUtilities v1.0.1-0.20260123064459-95e826507e1c
-	github.com/openai/openai-go v1.12.0
 	modernc.org/sqlite v1.50.1
 )
 
