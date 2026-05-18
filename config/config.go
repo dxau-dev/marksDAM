@@ -29,7 +29,7 @@ func DefaultConfig() *Config {
 		ImageExtensions: []string{"gif", "jpeg", "jpg", "png", "webp"},
 		DBPath:          "marksdam.db",
 		Model:           "claude-sonnet-4-5",
-		Prompt:          "Access the image. Return the data in the following JSON structure: {\"data\": {\"description\": $THE_DESCRIPTION, \"ocr\": [ $SLICE_OF_OCR_WORDS ], \"tags\":[ $SLICE_OF_TAGS ] }, \"meta\": { $ANY_META_DATA_IN_JSON_FORMAT } Where $THE_DESCRIPTION is a single sentence descripting, $SLICE_OF_OCR_WORDS are the words, if any, in the image, and $SLICE_OF_TAGS is a list of tags that will be associated with the image for searching. $ANY_META_DATA_IN_JSON_FORMAT contains any additional meta data that is relevant.",
+		Prompt:          "Assess the image. Return the data in the following JSON structure: {\"data\": {\"description\": $THE_DESCRIPTION, \"ocr\": [ $SLICE_OF_OCR_WORDS ], \"tags\":[ $SLICE_OF_TAGS ] }, \"meta\": { $ANY_META_DATA_IN_JSON_FORMAT }} Where $THE_DESCRIPTION is a single sentence describing the image, $SLICE_OF_OCR_WORDS are the words, if any, in the image, and $SLICE_OF_TAGS is a list of tags that will be associated with the image for searching. $ANY_META_DATA_IN_JSON_FORMAT contains any additional meta data that is relevant.",
 	}
 }
 
